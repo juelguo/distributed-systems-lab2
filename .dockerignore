@@ -1,0 +1,13 @@
+# Keep build contexts small.
+.git
+**/*.tar.gz
+**/*.zip
+**/*.so
+**/mrtmp.*
+src/main/mr-*
+src/main/diff.out
+src/main/mrcoordinator
+src/main/mrsequential
+src/main/mrworker
+src/main/diskvd
+src/main/pg-*.txt

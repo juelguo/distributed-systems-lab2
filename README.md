@@ -1,2 +1,6 @@
-# distributed-systems-lab2
-Lab 2 assignemnt for the Distributed Systems course
+
+# About the repository
+# Background
+# Getting started
+# Basic implementation
+# Advanced part

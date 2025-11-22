@@ -1,0 +1,22 @@
+{
+  "name": "Dist Sys Lab (Go 1.15)",
+  "image": "golang:1.15-buster",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ],
+      "settings": {
+        "go.toolsManagement.checkForUpdates": "local",
+        "go.toolsManagement.autoUpdate": false,
+        // Turn off gopls entirely to avoid Go 1.21+ requirements.
+        "go.useLanguageServer": false
+      }
+    }
+  },
+
+  "forwardPorts": [8080, 9090],
+
+  "postCreateCommand": "sed -i 's@deb.debian.org@archive.debian.org@g; s@security.debian.org@archive.debian.org@g' /etc/apt/sources.list && apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates && rm -rf /var/lib/apt/lists/*"
+}

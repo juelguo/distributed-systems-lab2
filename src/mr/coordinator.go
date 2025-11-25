@@ -27,6 +27,8 @@ const (
 	Completed
 )
 
+const taskTimeout = 10 * time.Second
+
 type Task struct {
 	ID       int
 	File     string
@@ -35,7 +37,7 @@ type Task struct {
 	TaskType TaskType
 }
 
-// RequestTask assigns work to a worker.
+// AssignTask assigns work to a worker.
 func (c *Coordinator) AssignTask(args *TaskRequestArgs, reply *TaskRequestReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -73,7 +75,7 @@ func (c *Coordinator) AssignTask(args *TaskRequestArgs, reply *TaskRequestReply)
 	return nil
 }
 
-// ReportTask updates coordinator state after a worker finishes.
+// TaskDone updates coordinator state after a worker finishes.
 func (c *Coordinator) TaskDone(args *TaskDoneArgs, reply *TaskDoneReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -112,11 +114,6 @@ func (c *Coordinator) assignTask(tasks []Task, t TaskType) (*Task, bool) {
 		if tasks[i].Status == Idle {
 			tasks[i].Status = InProgress
 			tasks[i].Start = time.Now()
-			if t == TaskTypeMap {
-				c.mapTasks[i] = tasks[i]
-			} else {
-				c.reduceTasks[i] = tasks[i]
-			}
 			return &tasks[i], true
 		}
 	}
@@ -133,17 +130,16 @@ func (c *Coordinator) allTasksDone(tasks []Task) bool {
 }
 
 func (c *Coordinator) requeueStaleTasks() {
-	timeout := 10 * time.Second
 	now := time.Now()
 
 	for i, task := range c.mapTasks {
-		if task.Status == InProgress && now.Sub(task.Start) > timeout {
+		if task.Status == InProgress && now.Sub(task.Start) > taskTimeout {
 			c.mapTasks[i].Status = Idle
 		}
 	}
 
 	for i, task := range c.reduceTasks {
-		if task.Status == InProgress && now.Sub(task.Start) > timeout {
+		if task.Status == InProgress && now.Sub(task.Start) > taskTimeout {
 			c.reduceTasks[i].Status = Idle
 		}
 	}

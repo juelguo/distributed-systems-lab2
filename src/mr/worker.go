@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
-	"io"
+	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
@@ -28,11 +28,12 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	// Todo: we haven't implemented the reduce part yet.
+	workerID := os.Getpid()
+	log.Printf("Worker %d: started", workerID) // Use process ID as worker ID
 	for {
 		// Request a task from the coordinator.
 		// function will be defined in rpc.go
-		args := TaskRequestArgs{}
+		args := TaskRequestArgs{WorkerID: workerID}
 		reply := TaskRequestReply{}
 		ok := call("Coordinator.AssignTask", &args, &reply)
 		if !ok {
@@ -45,7 +46,9 @@ func Worker(mapf func(string, string) []KeyValue,
 		case TaskTypeMap:
 			doMapTask(&reply, mapf)
 		case TaskTypeReduce:
-			doReduceTask(&reply, reducef)
+			// TODO: implement reduce task
+			// doReduceTask(&reply, reducef)
+			return
 		case TaskTypeWait:
 			time.Sleep(time.Second)
 		case TaskTypeExit:
@@ -71,7 +74,7 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 	if err != nil {
 		log.Fatalf("doMapTask: cannot open %v", filename)
 	}
-	content, err := io.ReadAll(file)
+	content, err := ioutil.ReadAll(file)
 	if err != nil {
 		log.Fatalf("doMapTask: cannot read %v", filename)
 	}

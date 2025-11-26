@@ -6,8 +6,10 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
-import "strconv"
+import (
+	"os"
+	"strconv"
+)
 
 //
 // example to show how to declare the arguments
@@ -35,11 +37,13 @@ const (
 )
 
 // TaskRequestArgs is sent by workers asking for work.
-type TaskRequestArgs struct{}
+type TaskRequestArgs struct{
+	WorkerID int  // Used to identify the worker (optional)
+}
 
 // TaskRequestReply describes the task assigned to a worker.
 type TaskRequestReply struct {
-	TaskType TaskType
+	TaskType TaskType 
 	TaskID   int
 	FileName string
 	NReduce  int

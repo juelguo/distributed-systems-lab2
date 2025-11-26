@@ -31,7 +31,7 @@ type Task struct {
 	ID       int
 	File     string
 	Status   TaskStatus
-	Start    time.Time
+	Start    time.Time // Used to track timeouts
 	TaskType TaskType
 }
 

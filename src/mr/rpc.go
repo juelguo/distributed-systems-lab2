@@ -23,7 +23,39 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+// TaskType represents the kind of work a worker should do.
+type TaskType int
 
+const (
+	TaskTypeNone TaskType = iota
+	TaskTypeMap
+	TaskTypeReduce
+	TaskTypeWait
+	TaskTypeExit
+)
+
+// TaskRequestArgs is sent by workers asking for work.
+type TaskRequestArgs struct{}
+
+// TaskRequestReply describes the task assigned to a worker.
+type TaskRequestReply struct {
+	TaskType TaskType
+	TaskID   int
+	FileName string
+	NReduce  int
+	NMap     int
+}
+
+// TaskDoneArgs is sent by workers when they finish a task.
+type TaskDoneArgs struct {
+	TaskID   int
+	TaskType TaskType
+}
+
+// TaskDoneReply acknowledges a task report.
+type TaskDoneReply struct {
+	OK bool
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

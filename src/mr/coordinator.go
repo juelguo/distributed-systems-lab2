@@ -21,7 +21,7 @@ type Coordinator struct {
 	reduceTasks []Task     // reduce task list - each task corresponds to a reduce bucket (intermediate files)
 	nMap        int        // number of map tasks = number of input files
 	nReduce     int        // number of reduce buckets, set in mrcoordinator.go
-	done        bool       // true if all tasks are done. TODO: may not need this field
+	done        bool       // true if all tasks are done.
 }
 
 type TaskStatus int

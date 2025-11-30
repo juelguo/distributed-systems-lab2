@@ -10,13 +10,18 @@ import (
 	"time"
 )
 
+/** 
+ * Author: Jueliang Guo 
+ * Description: Define the Coordinator structure and its methods
+**/
+
 type Coordinator struct {
 	mu          sync.Mutex // protect shared access to this structure
-	mapTasks    []Task     // per-input map tasks
-	reduceTasks []Task     // per-bucket reduce tasks
-	nReduce     int        // total number of reduce buckets, it set in mrcoordinator.go
-	nMap        int        // total number of map tasks, the total num of input files
-	done        bool       // true when all map and reduce tasks are completed
+	mapTasks    []Task     // map task list - each task corresponds to an input file
+	reduceTasks []Task     // reduce task list - each task corresponds to a reduce bucket (intermediate files)
+	nMap        int        // number of map tasks = number of input files
+	nReduce     int        // number of reduce buckets, set in mrcoordinator.go
+	done        bool       // true if all tasks are done. TODO: may not need this field
 }
 
 type TaskStatus int
@@ -37,12 +42,18 @@ type Task struct {
 	TaskType TaskType
 }
 
+/** 
+ * Author: Jueliang Guo
+ * Co-Author: Pengfei Li
+**/
+
 // AssignTask assigns work to a worker.
 func (c *Coordinator) AssignTask(args *TaskRequestArgs, reply *TaskRequestReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Requeue tasks that have timed out, if there are any timeout tasks, change their status back to Idle
+	// Also called in monitorTimedOutTasks
+	// Is this a good design?
 	c.requeueTimedOutTasks()
 
 	// if there are map tasks remaining, assign a map task
@@ -146,6 +157,7 @@ func (c *Coordinator) requeueTimedOutTasks() {
 	}
 }
 
+// Monitor and requeue timed-out tasks periodically
 func (c *Coordinator) monitorTimedOutTasks() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()

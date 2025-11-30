@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
 	"sort"
 	"time"
-	"io/ioutil"
 )
 
 // Map functions return a slice of KeyValue.
@@ -31,7 +31,7 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	workerID := os.Getpid()
-	log.Printf("Worker %d: started", workerID) // Use process ID as worker ID
+	log.Printf("Worker %d: started", workerID) // DEBUG ONLY: Use process ID as worker ID
 	for {
 		// Request a task from the coordinator.
 		// function will be defined in rpc.go
@@ -47,26 +47,32 @@ func Worker(mapf func(string, string) []KeyValue,
 		case TaskTypeMap:
 			doMapTask(&reply, mapf)
 		case TaskTypeReduce:
-			// TODO: implement reduce task
-			// doReduceTask(&reply, reducef)
-			return
+			doReduceTask(&reply, reducef)
 		case TaskTypeWait:
 			time.Sleep(time.Second)
 		case TaskTypeExit:
 			// All tasks are done, exit the worker.
 			return
 		default:
-			log.Fatalf("Worker: Unknown task type %v", reply.TaskType)
+			log.Printf("Worker: Unknown task type %v", reply.TaskType) // Don't crash, just log
+			return
 		} 
 	}
 
 
 }
 
-func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
-	filename := reply.FileName
-	// Read the input file.
+/** 
+ * Author: Shuo Zhang, 
+ * Co-Author: Jueliang Guo, Pengfei Li
+ * Description: Implement the map task function
+**/
 
+func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
+	mapId := reply.TaskID
+	filename := reply.FileName
+
+	// 1) Open a file and read its contents
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("doMapTask: cannot open %v", filename)
@@ -77,22 +83,21 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 	}
 	file.Close()
 
-	// Call the map funnction
+	// 2) Convert content to k-v arrays
 	kva := mapf(filename, string(content))
 
-	// Partition kva into nReduce intermediate files
-	intermediateFiles := make([]*os.File, reply.NReduce)
+	// 3) Partition kva into nReduce intermediate files
+	tempFiles := make([]*os.File, reply.NReduce)
 	encoders := make([]*json.Encoder, reply.NReduce)
 	for i := 0; i < reply.NReduce; i++ {
-		intermediateFileName := fmt.Sprintf("mr-temp-%d-%d", reply.TaskID, i)
-		intermediateFiles[i], err = os.Create(intermediateFileName)
+		tempFiles[i], err = ioutil.TempFile(".", "mr-temptemp-")
 		if err != nil {
-			log.Fatalf("doMapTask: cannot create intermediate file %v", intermediateFileName)
+			log.Fatalf("doMapTask: cannot create intermediate file for bucket %d", i)
 		}
-		encoders[i] = json.NewEncoder(intermediateFiles[i])
+		encoders[i] = json.NewEncoder(tempFiles[i])
 	}
 
-	// Distribute key-value pairs to intermediate files
+	// 4) Distribute key-value pairs to intermediate files
 	for _, kv := range kva {
 		reduceTaskNum := ihash(kv.Key) % reply.NReduce
 		err := encoders[reduceTaskNum].Encode(&kv)
@@ -101,23 +106,22 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 		}
 	}
 
-	// Close intermediate files
+	// 5) IMPORTANT: Atomic rename to avoid partial files!!!
+	// It eliminates the need for locking in the coordinator
+	// And avoid the issue of incomplete files if a worker crashes
 	for i := 0; i < reply.NReduce; i++ {
-		intermediateFiles[i].Close()
-	}
-	// Rename temporary files to final intermediate files
-	for i := 0; i < reply.NReduce; i++ {
-		tempFileName := fmt.Sprintf("mr-temp-%d-%d", reply.TaskID, i)
+		tempFiles[i].Close()
 		finalFileName := fmt.Sprintf("mr-%d-%d", reply.TaskID, i)
-		err := os.Rename(tempFileName, finalFileName)
+		err := os.Rename(tempFiles[i].Name(), finalFileName)
 		if err != nil {
-			log.Fatalf("doMapTask: cannot rename file %v to %v", tempFileName, finalFileName)
+			log.Fatalf("doMapTask: cannot rename file %v to %v", tempFiles[i].Name(), finalFileName)
 		}
 	}
 
+
 	// Notify the coordinator that the map task is done
 	taskDoneArgs := TaskDoneArgs{
-		TaskID:   reply.TaskID,
+		TaskID:   mapId,
 		TaskType: TaskTypeMap,
 	}
 	taskDoneReply := TaskDoneReply{}
@@ -126,6 +130,12 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 		log.Fatalf("doMapTask: RPC call to TaskDone failed")
 	}
 }
+
+/** 
+ * Author: Shuo Zhang
+ * Co-Author: Pengfei Li
+ * Description: Implement the reduce task function
+**/
 
 func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string) {
 	reduceID := reply.TaskID
@@ -161,14 +171,13 @@ func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string
 		return intermediate[i].Key < intermediate[j].Key
 	})
 
-	// 3) Create final output file mr-out-reduceID
-	// We should write to a temp file and then rename it
+	// 3) Create temp output files for the bucket
 	oname := fmt.Sprintf("mr-out-%d", reduceID)
-	ofile, err := os.Create(oname)
+	tempFile, err := ioutil.TempFile(".", "mr-out-tmp-")
 	if err != nil {
-		log.Fatalf("doReduceTask: cannot create %v: %v", oname, err)
+		log.Fatalf("doReduceTask: cannot create temp file for %v: %v", oname, err)
 	}
-	defer ofile.Close()
+	tempFileName := tempFile.Name()
 
 	// 4) Group by key and call reducef(key, values)
 	i := 0
@@ -185,14 +194,22 @@ func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string
 
 		output := reducef(intermediate[i].Key, values)
 
-		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
 
 		i = j
+	}
+	tempFile.Close()
+
+	// Atomic rename temp file to final output file
+	err = os.Rename(tempFileName, oname)
+	if err != nil {
+		os.Remove(tempFileName) // Clean up temp file on failure
+		log.Fatalf("doReduceTask: cannot rename temp file to %v: %v", oname, err)
 	}
 
 	// 5) Notify the coordinator
 	taskDoneArgs := TaskDoneArgs{
-		TaskID:   reply.TaskID,
+		TaskID:   reduceID,
 		TaskType: TaskTypeReduce,
 	}
 	taskDoneReply := TaskDoneReply{}
@@ -229,15 +246,13 @@ func CallExample() {
 	}
 }
 
-// send an RPC request to the coordinator, wait for the response.
-// usually returns true.
-// returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		log.Printf("dialing: %v", err) // Don't crash, just print the error
+		return false
 	}
 	defer c.Close()
 

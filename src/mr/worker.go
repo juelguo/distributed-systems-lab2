@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
 	"sort"
 	"time"
-	"io/ioutil"
 )
 
 // Map functions return a slice of KeyValue.

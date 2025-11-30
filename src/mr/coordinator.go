@@ -11,12 +11,12 @@ import (
 )
 
 type Coordinator struct {
-	mu          sync.Mutex
-	mapTasks    []Task
-	reduceTasks []Task
-	nReduce     int
-	nMap        int
-	done        bool
+	mu          sync.Mutex // protect shared access to this structure
+	mapTasks    []Task     // per-input map tasks
+	reduceTasks []Task     // per-bucket reduce tasks
+	nReduce     int        // total number of reduce buckets, it set in mrcoordinator.go
+	nMap        int        // total number of map tasks, the total num of input files
+	done        bool       // true when all map and reduce tasks are completed
 }
 
 type TaskStatus int
@@ -26,6 +26,8 @@ const (
 	InProgress
 	Completed
 )
+
+const taskTimeout = 10 * time.Second
 
 type Task struct {
 	ID       int
@@ -40,7 +42,8 @@ func (c *Coordinator) AssignTask(args *TaskRequestArgs, reply *TaskRequestReply)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.requeueStaleTasks()
+	// Requeue tasks that have timed out, if there are any timeout tasks, change their status back to Idle
+	c.requeueTimedOutTasks()
 
 	// if there are map tasks remaining, assign a map task
 	if !c.allTasksDone(c.mapTasks) {
@@ -132,20 +135,34 @@ func (c *Coordinator) allTasksDone(tasks []Task) bool {
 	return true
 }
 
-func (c *Coordinator) requeueStaleTasks() {
-	timeout := 10 * time.Second
+func (c *Coordinator) requeueTimedOutTasks() {
 	now := time.Now()
 
 	for i, task := range c.mapTasks {
-		if task.Status == InProgress && now.Sub(task.Start) > timeout {
+		if task.Status == InProgress && now.Sub(task.Start) > taskTimeout {
 			c.mapTasks[i].Status = Idle
 		}
 	}
 
 	for i, task := range c.reduceTasks {
-		if task.Status == InProgress && now.Sub(task.Start) > timeout {
+		if task.Status == InProgress && now.Sub(task.Start) > taskTimeout {
 			c.reduceTasks[i].Status = Idle
 		}
+	}
+}
+
+func (c *Coordinator) monitorTimedOutTasks() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		c.mu.Lock()
+		if c.done {
+			c.mu.Unlock()
+			return
+		}
+		c.requeueTimedOutTasks()
+		c.mu.Unlock()
 	}
 }
 
@@ -205,6 +222,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		c.reduceTasks[i] = Task{ID: i, Status: Idle, TaskType: TaskTypeReduce}
 	}
 
+	go c.monitorTimedOutTasks()
 	c.server()
 	return &c
 }

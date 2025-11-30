@@ -8,7 +8,9 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"time"
+	"io/ioutil"
 )
 
 // Map functions return a slice of KeyValue.
@@ -42,7 +44,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		// Process the assigned task.
 		switch reply.TaskType {
-		// TaskType will be defined in rpc.go
 		case TaskTypeMap:
 			doMapTask(&reply, mapf)
 		case TaskTypeReduce:
@@ -56,13 +57,9 @@ func Worker(mapf func(string, string) []KeyValue,
 			return
 		default:
 			log.Fatalf("Worker: Unknown task type %v", reply.TaskType)
-		} // Execute the map function.
+		} 
 	}
 
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
 
 }
 
@@ -84,11 +81,9 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 	kva := mapf(filename, string(content))
 
 	// Partition kva into nReduce intermediate files
-
 	intermediateFiles := make([]*os.File, reply.NReduce)
 	encoders := make([]*json.Encoder, reply.NReduce)
 	for i := 0; i < reply.NReduce; i++ {
-		// 路径不知道怎么写，暂时在当前目录下创建临时文件，最后再改名
 		intermediateFileName := fmt.Sprintf("mr-temp-%d-%d", reply.TaskID, i)
 		intermediateFiles[i], err = os.Create(intermediateFileName)
 		if err != nil {
@@ -110,7 +105,7 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 	for i := 0; i < reply.NReduce; i++ {
 		intermediateFiles[i].Close()
 	}
-	// rename temporary files to final intermediate files
+	// Rename temporary files to final intermediate files
 	for i := 0; i < reply.NReduce; i++ {
 		tempFileName := fmt.Sprintf("mr-temp-%d-%d", reply.TaskID, i)
 		finalFileName := fmt.Sprintf("mr-%d-%d", reply.TaskID, i)
@@ -129,6 +124,81 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 	ok := call("Coordinator.TaskDone", &taskDoneArgs, &taskDoneReply)
 	if !ok {
 		log.Fatalf("doMapTask: RPC call to TaskDone failed")
+	}
+}
+
+func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string) {
+	reduceID := reply.TaskID
+	nMap := reply.NMap
+
+	// 1) Read all intermediate files: mr-mapID-reduceID
+	var intermediate []KeyValue
+
+	for m := 0; m < nMap; m++ {
+		intermediateFileName := fmt.Sprintf("mr-%d-%d", m, reduceID)
+
+		file, err := os.Open(intermediateFileName)
+		if err != nil {
+			log.Fatalf("doReduceTask: cannot open %v: %v", intermediateFileName, err)
+		}
+
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				if err == io.EOF {
+					break
+				}
+				log.Fatalf("doReduceTask: cannot decode from %v: %v", intermediateFileName, err)
+			}
+			intermediate = append(intermediate, kv)
+		}
+		file.Close()
+	}
+
+	// 2) Sort by key
+	sort.Slice(intermediate, func(i, j int) bool {
+		return intermediate[i].Key < intermediate[j].Key
+	})
+
+	// 3) Create final output file mr-out-reduceID
+	// We should write to a temp file and then rename it
+	oname := fmt.Sprintf("mr-out-%d", reduceID)
+	ofile, err := os.Create(oname)
+	if err != nil {
+		log.Fatalf("doReduceTask: cannot create %v: %v", oname, err)
+	}
+	defer ofile.Close()
+
+	// 4) Group by key and call reducef(key, values)
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+
+		output := reducef(intermediate[i].Key, values)
+
+		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+		i = j
+	}
+
+	// 5) Notify the coordinator
+	taskDoneArgs := TaskDoneArgs{
+		TaskID:   reply.TaskID,
+		TaskType: TaskTypeReduce,
+	}
+	taskDoneReply := TaskDoneReply{}
+	ok := call("Coordinator.TaskDone", &taskDoneArgs, &taskDoneReply)
+	if !ok {
+		log.Fatalf("doReduceTask: RPC call to TaskDone failed")
 	}
 }
 

@@ -52,8 +52,6 @@ func (c *Coordinator) AssignTask(args *TaskRequestArgs, reply *TaskRequestReply)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Also called in monitorTimedOutTasks
-	// Is this a good design?
 	c.requeueTimedOutTasks()
 
 	// if there are map tasks remaining, assign a map task

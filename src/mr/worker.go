@@ -54,7 +54,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			// All tasks are done, exit the worker.
 			return
 		default:
-			log.Fatalf("Worker: Unknown task type %v", reply.TaskType)
+			log.Printf("Worker: Unknown task type %v", reply.TaskType) // Don't crash, just log
 			return
 		} 
 	}
@@ -87,15 +87,14 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 	kva := mapf(filename, string(content))
 
 	// 3) Partition kva into nReduce intermediate files
-	intermediateFiles := make([]*os.File, reply.NReduce)
+	tempFiles := make([]*os.File, reply.NReduce)
 	encoders := make([]*json.Encoder, reply.NReduce)
 	for i := 0; i < reply.NReduce; i++ {
-		intermediateFileName := fmt.Sprintf("mr-temp-%d-%d", mapId, i) // mr-temp-mapID-reduceID
-		intermediateFiles[i], err = os.Create(intermediateFileName)
+		tempFiles[i], err = ioutil.TempFile(".", "mr-temptemp-")
 		if err != nil {
-			log.Fatalf("doMapTask: cannot create intermediate file %v", intermediateFileName)
+			log.Fatalf("doMapTask: cannot create intermediate file for bucket %d", i)
 		}
-		encoders[i] = json.NewEncoder(intermediateFiles[i])
+		encoders[i] = json.NewEncoder(tempFiles[i])
 	}
 
 	// 4) Distribute key-value pairs to intermediate files
@@ -107,26 +106,22 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 		}
 	}
 
-	// Close all intermediate files
-	for i := 0; i < reply.NReduce; i++ {
-		intermediateFiles[i].Close()
-	}
-
 	// 5) IMPORTANT: Atomic rename to avoid partial files!!!
 	// It eliminates the need for locking in the coordinator
 	// And avoid the issue of incomplete files if a worker crashes
 	for i := 0; i < reply.NReduce; i++ {
-		tempFileName := fmt.Sprintf("mr-temp-%d-%d", reply.TaskID, i)
+		tempFiles[i].Close()
 		finalFileName := fmt.Sprintf("mr-%d-%d", reply.TaskID, i)
-		err := os.Rename(tempFileName, finalFileName)
+		err := os.Rename(tempFiles[i].Name(), finalFileName)
 		if err != nil {
-			log.Fatalf("doMapTask: cannot rename file %v to %v", tempFileName, finalFileName)
+			log.Fatalf("doMapTask: cannot rename file %v to %v", tempFiles[i].Name(), finalFileName)
 		}
 	}
 
+
 	// Notify the coordinator that the map task is done
 	taskDoneArgs := TaskDoneArgs{
-		TaskID:   reply.TaskID,
+		TaskID:   mapId,
 		TaskType: TaskTypeMap,
 	}
 	taskDoneReply := TaskDoneReply{}
@@ -250,13 +245,6 @@ func CallExample() {
 		fmt.Printf("call failed!\n")
 	}
 }
-
-/** 
- * Author: Shuo Zhang
- * Co-Author: Pengfei Li
- * Description: Polling function to communicate with coordinator.
- * 				Returns false if something goes wrong.
-**/
 
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")

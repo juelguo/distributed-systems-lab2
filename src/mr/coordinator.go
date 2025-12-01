@@ -165,22 +165,6 @@ func (c *Coordinator) requeueTimedOutTasks() {
 	}
 }
 
-// Monitor and requeue timed-out tasks periodically
-func (c *Coordinator) monitorTimedOutTasks() {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		c.mu.Lock()
-		if c.done {
-			c.mu.Unlock()
-			return
-		}
-		c.requeueTimedOutTasks()
-		c.mu.Unlock()
-	}
-}
-
 //
 // an example RPC handler.
 //
@@ -258,7 +242,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		c.reduceTasks[i] = Task{ID: i, Status: Idle, TaskType: TaskTypeReduce}
 	}
 
-	go c.monitorTimedOutTasks()
 	c.server()
 	return &c
 }

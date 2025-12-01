@@ -38,8 +38,10 @@ func Worker(mapf func(string, string) []KeyValue,
 		args := TaskRequestArgs{WorkerID: workerID}
 		reply := TaskRequestReply{}
 		ok := call("Coordinator.AssignTask", &args, &reply)
+		// If the coordinator is not reachable, log the error and exit
 		if !ok {
-			log.Fatalf("Worker: RPC call to AssignTask failed")
+			// Coordinator unreachable, exit worker (change to Printf)
+			log.Printf("Worker %d: RPC call to AssignTask failed", workerID)
 			return
 		}
 		// Process the assigned task.
@@ -51,15 +53,13 @@ func Worker(mapf func(string, string) []KeyValue,
 		case TaskTypeWait:
 			time.Sleep(time.Second)
 		case TaskTypeExit:
-			// All tasks are done, exit the worker.
+			log.Printf("Worker %d: received exit signal", workerID)
 			return
 		default:
 			log.Printf("Worker: Unknown task type %v", reply.TaskType) // Don't crash, just log
 			return
 		} 
 	}
-
-
 }
 
 /** 
@@ -213,7 +213,9 @@ func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string
 		TaskType: TaskTypeReduce,
 	}
 	taskDoneReply := TaskDoneReply{}
+	
 	ok := call("Coordinator.TaskDone", &taskDoneArgs, &taskDoneReply)
+	// If the coordinator is not reachable, log the error and exit
 	if !ok {
 		log.Fatalf("doReduceTask: RPC call to TaskDone failed")
 	}

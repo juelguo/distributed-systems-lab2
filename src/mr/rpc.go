@@ -38,7 +38,7 @@ const (
 
 // TaskRequestArgs is sent by workers asking for work.
 type TaskRequestArgs struct{
-	WorkerID int  // Used to identify the worker (optional)
+	WorkerID int  // Used to identify the worker (for debugging/logging)
 }
 
 // TaskRequestReply describes the task assigned to a worker.
@@ -49,6 +49,9 @@ type TaskRequestReply struct {
 	NReduce  int
 	NMap     int
 }
+
+// TODO: Maybe we can merge TaskDoneArgs and TaskRequestArgs
+// and TaskDoneReply and TaskRequestReply to reduce the number of RPCs?
 
 // TaskDoneArgs is sent by workers when they finish a task.
 type TaskDoneArgs struct {

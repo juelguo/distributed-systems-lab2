@@ -77,23 +77,25 @@ func StartWorkerServer() (*WorkerServer, string) {
     rpc.Register(ws)
     rpc.HandleHTTP()
 
-    // Use designated port from env, or random port if not set
-    port := os.Getenv("MR_WORKER_PORT")
-    if port == "" {
-        port = ":0" // OS picks a random available port
+    // Use designated address from env, or random port if not set
+    // This is to settle address inconsistancy insideout the container
+    host := os.Getenv("MR_WORKER")
+
+    _, port, err := net.SplitHostPort(host)
+    if err != nil {
+        log.Fatalf("WorkerServer: invalid MR_WORKER address: %v", err)
     }
     
-    l, err := net.Listen("tcp", port)
+    l, err := net.Listen("tcp", ":"+port)
     if err != nil {
         log.Fatalf("WorkerServer: cannot listen on %s: %v", port, err)
     }
 	
-    ws.address = l.Addr().String()
-    log.Printf("WorkerServer: listening on %s", ws.address)
+    log.Printf("WorkerServer: listening on %s", host)
 
     go http.Serve(l, nil)
 
-    return ws, ws.address
+    return ws, host
 }
 
 // RegisterFile marks a file as available on this worker

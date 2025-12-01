@@ -83,13 +83,17 @@ It exercises word count, indexer, parallelism, job counting, early exit, and cra
 ### Testing distributed mode
 1) Coordinator machine:
 ```bash
-export COORDINATOR_PORT=":10086" # remember to add colon
+cd src/main
+export MR_COORDINATOR="<coordinator-ip>:9090" # Now we exctract port from here
 go run mrcoordinator.go pg-*.txt
 ```
 
 2) Worker machines:
 ```bash
-export MR_COORDINATOR="<coordinator-ip>:10086"
+export MR_COORDINATOR="<coordinator-ip>:9090"
+export MR_WORKER_PORT=":8080" # Optional: specify worker port cuz we are running in a docker container
+cd src/main
+rm -f mr-out*
 go run mrworker.go wc.so
 ```
 

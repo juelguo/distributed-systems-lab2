@@ -6,6 +6,7 @@ import (
     "net"
     "net/http"
     "net/rpc"
+    "os"
     "sync"
 )
 
@@ -65,6 +66,8 @@ func (ws *WorkerServer) Heartbeat(args *struct{}, reply *struct{}) error {
 }
 
 // Start an RPC server
+// Set MR_WORKER_PORT (e.g., ":8080") to listen on a specific port,
+// otherwise a random available port is used.
 func StartWorkerServer() (*WorkerServer, string) {
     ws := &WorkerServer{
         files:    make(map[string]bool),
@@ -74,10 +77,15 @@ func StartWorkerServer() (*WorkerServer, string) {
     rpc.Register(ws)
     rpc.HandleHTTP()
 
-    // Listen on a random available port (decided by OS)
-    l, err := net.Listen("tcp", ":0")
+    // Use designated port from env, or random port if not set
+    port := os.Getenv("MR_WORKER_PORT")
+    if port == "" {
+        port = ":0" // OS picks a random available port
+    }
+    
+    l, err := net.Listen("tcp", port)
     if err != nil {
-        log.Fatalf("WorkerServer: cannot listen: %v", err)
+        log.Fatalf("WorkerServer: cannot listen on %s: %v", port, err)
     }
 	
     ws.address = l.Addr().String()

@@ -190,10 +190,14 @@ func (c *Coordinator) server() {
 	rpc.HandleHTTP()
 
 	// Check if coordinator should listen on TCP (distributed mode)
-	port := os.Getenv("COORDINATOR_PORT")
-	if port != "" {
+	host := os.Getenv("MR_COORDINATOR")
+	if host != "" {
+		_, port, err := net.SplitHostPort(host)
+		if err != nil {
+			log.Fatal("invalid MR_COORDINATOR address:", err)
+		}
 		// Distributed mode: listen on TCP
-		l, e := net.Listen("tcp", port)
+		l, e := net.Listen("tcp", ":"+port)
 		if e != nil {
 			log.Fatal("listen error:", e)
 		}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"time"
+	"bytes"
 )
 
 // Map functions return a slice of KeyValue.
@@ -27,29 +28,79 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+const coordinatorTimeout = 30 * time.Second // 30s
+const maxFailedAttempts = 3
+
+// Periodically check if the coordinator is alive
+
+func checkCoordinatorAlive(done chan struct{}) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	failedAttempts := 0
+
+	for {
+		select {
+		// Coordinator signals that all tasks are done
+		case <-done:
+			return
+		
+		// Timeout
+		case <-ticker.C:
+			args := HeartbeatArgs{}
+			reply := HeartbeatReply{}
+			ok := call("Coordinator.Heartbeat", &args, &reply)
+			if !ok {
+				failedAttempts++
+				log.Printf("Worker: Coordinator heartbeat failed (%d/%d)", failedAttempts, maxFailedAttempts)
+				if failedAttempts >= maxFailedAttempts {
+					log.Printf("Worker: Coordinator is unresponsive. Exiting.")
+					os.Exit(1)
+				}
+			} else {
+				failedAttempts = 0 // Reset on success
+			}
+		}
+	}
+}
+
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	workerID := os.Getpid()
 	log.Printf("Worker %d: started", workerID) // DEBUG ONLY: Use process ID as worker ID
+
+	// NEW: Start WorkerServer and heartbeat goroutine if in distributed mode
+	var workerServer *WorkerServer
+	var workerAddress string
+	if IsDistributed() {
+		workerServer, workerAddress = StartWorkerServer()
+		_ = workerServer // Suppress unused variable warning
+		coordDone := make(chan struct{})
+		go checkCoordinatorAlive(coordDone)
+		defer close(coordDone)
+	}
+
 	for {
 		// Request a task from the coordinator.
 		// function will be defined in rpc.go
-		args := TaskRequestArgs{WorkerID: workerID}
+		args := TaskRequestArgs{WorkerID: workerID, WorkerAddress: workerAddress}
 		reply := TaskRequestReply{}
 		ok := call("Coordinator.AssignTask", &args, &reply)
+
 		// If the coordinator is not reachable, log the error and exit
 		if !ok {
 			// Coordinator unreachable, exit worker (change to Printf)
 			log.Printf("Worker %d: RPC call to AssignTask failed", workerID)
 			return
 		}
+
 		// Process the assigned task.
 		switch reply.TaskType {
 		case TaskTypeMap:
-			doMapTask(&reply, mapf)
+			doMapTask(&reply, mapf, workerServer)
 		case TaskTypeReduce:
-			doReduceTask(&reply, reducef)
+			doReduceTask(&reply, reducef, workerServer)
 		case TaskTypeWait:
 			time.Sleep(time.Second)
 		case TaskTypeExit:
@@ -68,7 +119,7 @@ func Worker(mapf func(string, string) []KeyValue,
  * Description: Implement the map task function
 **/
 
-func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
+func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue, ws *WorkerServer) {
 	mapId := reply.TaskID
 	filename := reply.FileName
 
@@ -118,13 +169,24 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
 		}
 	}
 
-
-	// Notify the coordinator that the map task is done
-	taskDoneArgs := TaskDoneArgs{
-		TaskID:   mapId,
-		TaskType: TaskTypeMap,
+	// NEW: Register intermediate files with WorkerServer
+	if ws != nil {
+		for i := 0; i < reply.NReduce; i++ {
+			intermediateFileName := fmt.Sprintf("mr-%d-%d", reply.TaskID, i)
+			ws.RegisterFile(intermediateFileName)
+		}
 	}
-	taskDoneReply := TaskDoneReply{}
+
+	// 6) Notify the coordinator that the map task is done
+	taskDoneArgs := TaskRequestArgs{
+		TaskID:        mapId,
+		TaskType:      TaskTypeMap,
+	}
+	// If WorkerServer is running, use its address for intermediate file location
+	if ws != nil {
+		taskDoneArgs.WorkerAddress = ws.Address()
+	}
+	taskDoneReply := TaskRequestReply{}
 	ok := call("Coordinator.TaskDone", &taskDoneArgs, &taskDoneReply)
 	if !ok {
 		log.Fatalf("doMapTask: RPC call to TaskDone failed")
@@ -137,22 +199,39 @@ func doMapTask(reply *TaskRequestReply, mapf func(string, string) []KeyValue) {
  * Description: Implement the reduce task function
 **/
 
-func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string) {
+func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string, ws *WorkerServer) {
 	reduceID := reply.TaskID
 	nMap := reply.NMap
+	intermediate := []KeyValue{}
 
-	// 1) Read all intermediate files: mr-mapID-reduceID
-	var intermediate []KeyValue
+	// NEW: 1) Use WorkerServer to fetch intermediate files if in distributed mode
 
-	for m := 0; m < nMap; m++ {
-		intermediateFileName := fmt.Sprintf("mr-%d-%d", m, reduceID)
+	for mapId := 0; mapId < nMap; mapId++ {
+		intermediateFileName := fmt.Sprintf("mr-%d-%d", mapId, reduceID)
+		var content []byte
 
-		file, err := os.Open(intermediateFileName)
-		if err != nil {
-			log.Fatalf("doReduceTask: cannot open %v: %v", intermediateFileName, err)
+		if IsDistributed() && ws != nil {
+			workerAddr, ok := reply.IntermediateLocations[mapId]
+			if !ok {
+				log.Printf("doReduceTask: no location for map task %d", mapId)
+				continue
+			}
+			res, err := fetchFileHelper(workerAddr, intermediateFileName)
+			if err != nil {
+				log.Printf("doReduceTask: cannot fetch intermediate file %v from worker %v: %v", intermediateFileName, workerAddr, err)
+				continue
+			}
+			content = res
+
+		} else {
+			data, err := ioutil.ReadFile(intermediateFileName)
+			if err != nil {
+				log.Fatalf("doReduceTask: cannot read intermediate file %v: %v", intermediateFileName, err)
+			}
+			content = data
 		}
-
-		dec := json.NewDecoder(file)
+		// Decode JSON-encoded KeyValue pairs
+		dec := json.NewDecoder(bytes.NewReader(content))
 		for {
 			var kv KeyValue
 			if err := dec.Decode(&kv); err != nil {
@@ -163,7 +242,6 @@ func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string
 			}
 			intermediate = append(intermediate, kv)
 		}
-		file.Close()
 	}
 
 	// 2) Sort by key
@@ -208,17 +286,37 @@ func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string
 	}
 
 	// 5) Notify the coordinator
-	taskDoneArgs := TaskDoneArgs{
+	taskDoneArgs := TaskRequestArgs{
 		TaskID:   reduceID,
 		TaskType: TaskTypeReduce,
 	}
-	taskDoneReply := TaskDoneReply{}
+	taskDoneReply := TaskRequestReply{}
 	
 	ok := call("Coordinator.TaskDone", &taskDoneArgs, &taskDoneReply)
 	// If the coordinator is not reachable, log the error and exit
 	if !ok {
 		log.Fatalf("doReduceTask: RPC call to TaskDone failed")
 	}
+}
+
+// NEW: Helper function to fetch file content from a worker via RPC
+
+func fetchFileHelper(workerAddr string, filename string) ([]byte, error) {
+	client, err := rpc.DialHTTP("tcp", workerAddr)
+	if err != nil {
+		return nil, fmt.Errorf("fetchFileHelper: dialing error: %v", err)
+	}
+	defer client.Close()
+
+	args := FetchFileArgs{FileName: filename}
+	reply := FetchFileReply{}
+
+	err = client.Call("WorkerServer.FetchFile", &args, &reply)
+	if err != nil {
+		return nil, fmt.Errorf("fetchFileHelper: cannot get %s from %s: %v", filename, workerAddr, err)
+	}
+
+	return reply.Content, nil
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -249,9 +347,19 @@ func CallExample() {
 }
 
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := coordinatorSock()
-	c, err := rpc.DialHTTP("unix", sockname)
+	var c *rpc.Client
+	var err error
+
+	if IsDistributed() {
+		// TCP mode for distributed
+		addr := coordinatorSock()
+		c, err = rpc.DialHTTP("tcp", addr)
+	} else {
+		// Unix socket for local mode
+		sockname := coordinatorSock()
+		c, err = rpc.DialHTTP("unix", sockname)
+	}
+
 	if err != nil {
 		log.Printf("dialing: %v", err) // Don't crash, just print the error
 		return false

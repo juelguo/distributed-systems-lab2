@@ -80,6 +80,19 @@ It exercises word count, indexer, parallelism, job counting, early exit, and cra
 - At least detect coordinator failure.
 - Demo with ≥2 workers, 1 coordinator; be ready to kill processes and keep running.
 
+### Testing distributed mode
+1) Coordinator machine:
+```bash
+export COORDINATOR_PORT=":10086" # remember to add colon
+go run mrcoordinator.go pg-*.txt
+```
+
+2) Worker machines:
+```bash
+export MR_COORDINATOR="<coordinator-ip>:10086"
+go run mrworker.go wc.so
+```
+
 ## Tips and hints
 - Use `go run -race` while developing.
 - Rebuild plugins after changing `mr/` code:

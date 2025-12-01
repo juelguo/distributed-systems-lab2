@@ -22,6 +22,8 @@ type Coordinator struct {
 	nMap        int        // number of map tasks = number of input files
 	nReduce     int        // number of reduce buckets, set in mrcoordinator.go
 	done        bool       // true if all tasks are done.
+	// NEW: mapTaskID -> workerAddress
+	intermediateLocations map[int]string 
 }
 
 type TaskStatus int
@@ -35,11 +37,12 @@ const (
 const taskTimeout = 10 * time.Second
 
 type Task struct {
-	ID       int
-	File     string
-	Status   TaskStatus
-	Start    time.Time // Used to track timeouts
-	TaskType TaskType
+	ID     			int
+	File     		string
+	Status   		TaskStatus
+	Start    		time.Time // Used to track timeouts
+	TaskType 		TaskType
+	WorkerAddress 	string // Address of the worker processing this task
 }
 
 /** 
@@ -75,6 +78,11 @@ func (c *Coordinator) AssignTask(args *TaskRequestArgs, reply *TaskRequestReply)
 			reply.TaskID = task.ID
 			reply.NReduce = c.nReduce
 			reply.NMap = c.nMap
+			reply.IntermediateLocations = make(map[int]string)
+			// NEW: provide intermediate file locations for this reduce task
+			for mapTaskID, location := range c.intermediateLocations {
+				reply.IntermediateLocations[mapTaskID] = location
+			}
 			return nil
 		}
 		reply.TaskType = TaskTypeWait
@@ -86,7 +94,7 @@ func (c *Coordinator) AssignTask(args *TaskRequestArgs, reply *TaskRequestReply)
 }
 
 // TaskDone updates coordinator state after a worker finishes.
-func (c *Coordinator) TaskDone(args *TaskDoneArgs, reply *TaskDoneReply) error {
+func (c *Coordinator) TaskDone(args *TaskRequestArgs, reply *TaskRequestReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -94,15 +102,17 @@ func (c *Coordinator) TaskDone(args *TaskDoneArgs, reply *TaskDoneReply) error {
 	switch args.TaskType {
 	case TaskTypeMap:
 		target = &c.mapTasks
+		// NEW: record intermediate file location
+		c.intermediateLocations[args.TaskID] = args.WorkerAddress 
 	case TaskTypeReduce:
 		target = &c.reduceTasks
 	default:
-		reply.OK = false
+		reply.IsDone = false
 		return nil
 	}
 
 	if args.TaskID < 0 || args.TaskID >= len(*target) {
-		reply.OK = false
+		reply.IsDone = false
 		return nil
 	}
 
@@ -115,7 +125,7 @@ func (c *Coordinator) TaskDone(args *TaskDoneArgs, reply *TaskDoneReply) error {
 		c.done = true
 	}
 
-	reply.OK = true
+	reply.IsDone = true
 	return nil
 }
 
@@ -181,20 +191,40 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+// Heartbeat allows workers to check if coordinator is alive
+func (c *Coordinator) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) error {
+	return nil
+}
+
 //
 // start a thread that listens for RPCs from worker.go
 //
+// Distributed mode: set COORDINATOR_PORT (e.g., ":10086") to listen on TCP
+// Local mode: uses Unix socket (no env needed)
 func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
-	//l, e := net.Listen("tcp", ":1234")
-	sockname := coordinatorSock()
-	os.Remove(sockname)
-	l, e := net.Listen("unix", sockname)
-	if e != nil {
-		log.Fatal("listen error:", e)
+
+	// Check if coordinator should listen on TCP (distributed mode)
+	port := os.Getenv("COORDINATOR_PORT")
+	if port != "" {
+		// Distributed mode: listen on TCP
+		l, e := net.Listen("tcp", port)
+		if e != nil {
+			log.Fatal("listen error:", e)
+		}
+		log.Printf("Coordinator listening on TCP port %s\n", port)
+		go http.Serve(l, nil)
+	} else {
+		// Local mode: Unix socket
+		sockname := coordinatorSock()
+		os.Remove(sockname)
+		l, e := net.Listen("unix", sockname)
+		if e != nil {
+			log.Fatal("listen error:", e)
+		}
+		go http.Serve(l, nil)
 	}
-	go http.Serve(l, nil)
 }
 
 //
@@ -218,6 +248,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		reduceTasks: make([]Task, nReduce),
 		nReduce:     nReduce,
 		nMap:        len(files),
+		intermediateLocations: make(map[int]string),
 	}
 
 	for i, f := range files {

@@ -30,7 +30,7 @@ type WorkerServer struct {
 
 // Address returns the worker server's address
 func (ws *WorkerServer) Address() string {
-    return ws.address
+    return os.Getenv("MR_WORKER")
 }
 
 // Sent by other workers to request an intermediate file

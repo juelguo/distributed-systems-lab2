@@ -16,7 +16,7 @@
     }
   },
 
-  "forwardPorts": [8080, 9090],
+  "appPort": ["8080:8080", "9090:9090"],
 
   "postCreateCommand": "sed -i 's@deb.debian.org@archive.debian.org@g; s@security.debian.org@archive.debian.org@g' /etc/apt/sources.list && apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates && rm -rf /var/lib/apt/lists/*"
 }

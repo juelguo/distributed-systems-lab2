@@ -302,6 +302,7 @@ func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string
 // NEW: Helper function to fetch file content from a worker via RPC
 
 func fetchFileHelper(workerAddr string, filename string) ([]byte, error) {
+	log.Printf("fetchFileHelper: dialing %s", workerAddr)
 	client, err := rpc.DialHTTP("tcp", workerAddr)
 	if err != nil {
 		return nil, fmt.Errorf("fetchFileHelper: dialing error: %v", err)

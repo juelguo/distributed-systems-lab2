@@ -216,12 +216,21 @@ func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string
 				log.Printf("doReduceTask: no location for map task %d", mapId)
 				continue
 			}
+			
+			if workerAddr == ws.Address() {
+				data, err := ioutil.ReadFile(intermediateFileName)
+				if err != nil {
+					log.Fatalf("doReduceTask: cannot read intermediate file %v from local storage: %v", intermediateFileName, err)
+				}
+				content = data
+			} else {
 			res, err := fetchFileHelper(workerAddr, intermediateFileName)
 			if err != nil {
 				log.Printf("doReduceTask: cannot fetch intermediate file %v from worker %v: %v", intermediateFileName, workerAddr, err)
 				continue
 			}
 			content = res
+			}
 
 		} else {
 			data, err := ioutil.ReadFile(intermediateFileName)
@@ -302,7 +311,6 @@ func doReduceTask(reply *TaskRequestReply, reducef func(string, []string) string
 // NEW: Helper function to fetch file content from a worker via RPC
 
 func fetchFileHelper(workerAddr string, filename string) ([]byte, error) {
-	log.Printf("fetchFileHelper: dialing %s", workerAddr)
 	client, err := rpc.DialHTTP("tcp", workerAddr)
 	if err != nil {
 		return nil, fmt.Errorf("fetchFileHelper: dialing error: %v", err)

@@ -91,10 +91,10 @@ go run mrcoordinator.go pg-*.txt
 2) Worker machines:
 ```bash
 export MR_COORDINATOR="<coordinator-ip>:9090"
-export MR_WORKER_PORT=":8080" # Optional: specify worker port cuz we are running in a docker container
+export MR_WORKER="<worker-ip>:8080" # Optional: specify worker port cuz we are running in a docker container
 cd src/main
 rm -f mr-out*
-go run mrworker.go wc.so
+go run -race mrworker.go wc.so
 ```
 
 ## Tips and hints
